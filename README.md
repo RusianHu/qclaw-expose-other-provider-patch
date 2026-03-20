@@ -1,11 +1,13 @@
 # QClaw expose-other-provider patch
 
-一个面向 **QClaw** 的 PowerShell 补丁脚本，用于把“大模型设置”中的一个现有固定厂商槽位替换为“其他”，从而进入程序内置但默认未暴露的 custom provider 分支，允许使用第三方 openai-completions 协议的模型。
+一个面向 **QClaw** 的修补脚本，用于把“大模型设置”中的 doubao 选项替换为 “其他” ，从而进入程序内置但默认未暴露的 custom provider 分支，允许使用第三方 openai-completions 协议的模型。
+
+<img width="1200" height="800" alt="image" src="https://github.com/user-attachments/assets/14a173e6-689e-43d4-bb86-869fc2c0c23f" />
 
 ## 功能
 
 - 自动识别 `QClaw` 安装目录
-- 默认校验目标版本为 `0.1.13`，后续支持可能需要再适配。
+- 校验目标版本为 `0.1.13`，后续支持可能需要再适配。
 - 使用等长原位补丁修改 `resources/app.asar`
 - 提供状态探测、干跑、正式补丁、反修补、基于备份回滚
 - 备份与副本统一输出到脚本同级子目录 `QClawPatches`
@@ -79,4 +81,4 @@
 
 ## License
 
-本项目使用 `GPL-3.0` 许可证，详见 `LICENSE`。
+本项目使用 `GPL-3.0` 许可证，详见 [LICENSE](LICENSE)。
