@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.1.16',
+    [string]$ExpectedDisplayVersion = '0.1.19',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -609,7 +609,8 @@ $searchText = 'key:"doubao",label:"豆包"'
 $replaceText = 'key:"other",label: "其他"'
 $guardTexts = @(
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
-    'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}'
+    'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
+    'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}'
 )
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
