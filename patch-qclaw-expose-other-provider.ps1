@@ -76,6 +76,87 @@ function Get-ScopedBackupCandidates([string]$directory, [string]$installTag) {
     )
 }
 
+function Get-TextHitCount([string]$haystack, [string]$needle) {
+    if ([string]::IsNullOrEmpty($needle)) {
+        return 0
+    }
+
+    $count = 0
+    $startIndex = 0
+    while ($true) {
+        $pos = $haystack.IndexOf($needle, $startIndex, [System.StringComparison]::Ordinal)
+        if ($pos -lt 0) { break }
+        $count++
+        $startIndex = $pos + $needle.Length
+    }
+    return $count
+}
+
+function Get-SkillHubRegexFixState([string]$installRoot, [string]$fileVersion, [string]$productVersion, [bool]$allowUnknownVersion) {
+    $targetFile = Join-Path $installRoot $skillHubRegexFixRelativePath
+
+    $versionEligible = $false
+    foreach ($version in $skillHubRegexFixSupportedVersions) {
+        if (($fileVersion -and $fileVersion -like ('*' + $version + '*')) -or ($productVersion -and $productVersion -like ('*' + $version + '*'))) {
+            $versionEligible = $true
+            break
+        }
+    }
+
+    $fixAllowed = ($versionEligible -or $allowUnknownVersion)
+    if (!(Test-Path -LiteralPath $targetFile)) {
+        return [pscustomobject]@{
+            FilePath = $targetFile
+            Exists = $false
+            VersionEligible = $versionEligible
+            FixAllowed = $fixAllowed
+            FeatureRecognized = $false
+            RequiresFix = $false
+            AlreadyFixed = $false
+            Content = $null
+        }
+    }
+
+    $content = [System.IO.File]::ReadAllText($targetFile)
+    $legacyRuntimeHits = Get-TextHitCount $content $skillHubRegexFixLegacyRuntimePattern
+    $patchedRuntimeHits = Get-TextHitCount $content $skillHubRegexFixPatchedRuntimePattern
+    $legacySchemaHits = Get-TextHitCount $content $skillHubRegexFixLegacySchemaPattern
+    $patchedSchemaHits = Get-TextHitCount $content $skillHubRegexFixPatchedSchemaPattern
+
+    $featureRecognized = (($legacyRuntimeHits + $patchedRuntimeHits) -eq 1 -and ($legacySchemaHits + $patchedSchemaHits) -eq 1)
+    $alreadyFixed = ($legacyRuntimeHits -eq 0 -and $legacySchemaHits -eq 0 -and $patchedRuntimeHits -eq 1 -and $patchedSchemaHits -eq 1)
+    $requiresFix = ($featureRecognized -and (($legacyRuntimeHits -eq 1) -or ($legacySchemaHits -eq 1)))
+
+    return [pscustomobject]@{
+        FilePath = $targetFile
+        Exists = $true
+        VersionEligible = $versionEligible
+        FixAllowed = $fixAllowed
+        FeatureRecognized = $featureRecognized
+        RequiresFix = $requiresFix
+        AlreadyFixed = $alreadyFixed
+        Content = $content
+        LegacyRuntimeHits = $legacyRuntimeHits
+        PatchedRuntimeHits = $patchedRuntimeHits
+        LegacySchemaHits = $legacySchemaHits
+        PatchedSchemaHits = $patchedSchemaHits
+    }
+}
+
+function New-SkillHubRegexFixedContent([psobject]$state) {
+    if (-not $state.Exists) {
+        throw 'skillhub-installer.ts 不存在，无法生成修补内容。'
+    }
+    if (-not $state.FeatureRecognized) {
+        throw 'skillhub-installer.ts 未命中兼容特征，拒绝生成修补内容。'
+    }
+
+    $updated = [string]$state.Content
+    $updated = $updated.Replace($skillHubRegexFixLegacyRuntimePattern, $skillHubRegexFixPatchedRuntimePattern)
+    $updated = $updated.Replace($skillHubRegexFixLegacySchemaPattern, $skillHubRegexFixPatchedSchemaPattern)
+    return $updated
+}
+
 function New-ReplacedBytes([byte[]]$source, [int]$offset, [byte[]]$replacement) {
     [byte[]]$result = New-Object byte[] ($source.Length)
     [Array]::Copy($source, $result, $source.Length)
@@ -612,6 +693,12 @@ $guardTexts = @(
     'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}'
 )
+$skillHubRegexFixRelativePath = 'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
+$skillHubRegexFixSupportedVersions = @('0.1.19')
+$skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
+$skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
+$skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
+$skillHubRegexFixPatchedSchemaPattern = 'pattern: "^[A-Za-z0-9_.-]{1,128}$",'
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
 $replace = [System.Text.Encoding]::UTF8.GetBytes($replaceText)
@@ -714,6 +801,24 @@ if (-not $AllowUnknownVersion) {
     if (-not $versionOk) {
         throw "版本校验失败：当前版本与预期 [$ExpectedDisplayVersion] 不匹配。可用 -AllowUnknownVersion 跳过版本限制。"
     }
+}
+
+$skillHubFixState = Get-SkillHubRegexFixState $resolvedRoot $fv $pv ([bool]$AllowUnknownVersion)
+if ($skillHubFixState.Exists -and $skillHubFixState.FixAllowed -and -not $skillHubFixState.FeatureRecognized) {
+    Write-WarnMsg ('skillhub regex 修复未命中兼容特征，已跳过：' + $skillHubFixState.FilePath)
+}
+$skillHubFixMode = if (-not $skillHubFixState.Exists) {
+    'MISSING'
+} elseif (-not $skillHubFixState.FixAllowed) {
+    'SKIP_VERSION'
+} elseif (-not $skillHubFixState.FeatureRecognized) {
+    'SKIP_FEATURE'
+} elseif ($skillHubFixState.RequiresFix) {
+    'PATCH'
+} elseif ($skillHubFixState.AlreadyFixed) {
+    'ALREADY_FIXED'
+} else {
+    'NOOP'
 }
 
 [byte[]]$bytes = [System.IO.File]::ReadAllBytes($asarPath)
@@ -909,16 +1014,23 @@ $targetOffset = $posSearch
 if ($posReplace -ge 0 -and $posSearch -lt 0) {
     $patchedIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posReplace
     if ($patchedIntegrityState.IntegrityMatch -and $currentEmbeddedHeaderHash -ceq $currentRawHeaderHash) {
-        Write-Host 'ALREADY_PATCHED' -ForegroundColor Yellow
-        Write-Host ('APP_ASAR=' + $asarPath)
-        Write-Host ('EXE=' + $exePath)
-        Write-Host ('PATCH_OFFSET=' + $posReplace)
-        Write-Host ('TARGET_PATH=' + $patchedIntegrityState.Path)
-        Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
-        exit 0
+        if ($skillHubFixMode -eq 'PATCH') {
+            $patchMode = 'SKILLHUB_FIX_ONLY'
+            $targetOffset = $posReplace
+        } else {
+            Write-Host 'ALREADY_PATCHED' -ForegroundColor Yellow
+            Write-Host ('APP_ASAR=' + $asarPath)
+            Write-Host ('EXE=' + $exePath)
+            Write-Host ('PATCH_OFFSET=' + $posReplace)
+            Write-Host ('TARGET_PATH=' + $patchedIntegrityState.Path)
+            Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+            Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
+            exit 0
+        }
+    } else {
+        $patchMode = 'REPAIR_PATCHED'
+        $targetOffset = $posReplace
     }
-    $patchMode = 'REPAIR_PATCHED'
-    $targetOffset = $posReplace
 }
 
 if ($patchMode -eq 'PATCH') {
@@ -933,6 +1045,58 @@ if ($patchMode -eq 'PATCH') {
     if (-not $searchIntegrityState.IntegrityMatch) {
         throw '补丁前校验失败：原始目标文件的 ASAR 完整性记录不一致，拒绝补丁。'
     }
+}
+
+$skillHubFixBackup = $null
+$skillHubFixFixedCopy = $null
+$skillHubFixedContent = $null
+if ($skillHubFixMode -eq 'PATCH') {
+    $skillHubFixTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $skillHubFixBackup = Join-Path $patchDir ('skillhub-installer.ts.' + $installTag + '.' + $skillHubFixTimestamp + '.bak')
+    $skillHubFixFixedCopy = Join-Path $patchDir ('skillhub-installer.ts.' + $installTag + '.' + $skillHubFixTimestamp + '.fixed')
+    $skillHubFixedContent = New-SkillHubRegexFixedContent $skillHubFixState
+    [System.IO.File]::WriteAllText($skillHubFixFixedCopy, $skillHubFixedContent, [System.Text.UTF8Encoding]::new($false))
+    $verifySkillHubFixed = [System.IO.File]::ReadAllText($skillHubFixFixedCopy)
+    if ((Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
+        (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
+        throw 'skillhub fixed 副本校验失败：未写入唯一兼容特征。'
+    }
+}
+
+if ($patchMode -eq 'SKILLHUB_FIX_ONLY') {
+    Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex'
+    Write-Step ('skillhub 备份将保存到 ' + $skillHubFixBackup)
+    Write-Step ('skillhub fixed 副本将保存到 ' + $skillHubFixFixedCopy)
+
+    if ($DryRun) {
+        Write-Host 'DRY_RUN_OK' -ForegroundColor Green
+        Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
+        Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+        Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+        Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
+        Write-Host ('MODE=' + $patchMode)
+        exit 0
+    }
+
+    Stop-QClawProcess
+    Copy-Item -LiteralPath $skillHubFixState.FilePath -Destination $skillHubFixBackup -Force
+    [System.IO.File]::WriteAllText($skillHubFixState.FilePath, $skillHubFixedContent, [System.Text.UTF8Encoding]::new($false))
+    $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
+    if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
+        throw 'skillhub-installer regex 修补写回校验失败。'
+    }
+
+    Write-Host 'PATCH_OK' -ForegroundColor Green
+    Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+    Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
+    Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+    Write-Host ('MODE=' + $patchMode)
+    exit 0
 }
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -980,11 +1144,28 @@ if ($DryRun) {
     Write-Host ('WOULD_UPDATE_EXE=' + $exePath)
     Write-Host ('WOULD_WRITE_HEADER_SHA256=' + $patchedBuild.HeaderHash)
     Write-Host ('TARGET_PATH=' + $patchedBuild.TargetPath)
+    if ($skillHubFixMode -eq 'PATCH') {
+        Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+        Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+        Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
+    }
+    Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
     Write-Host ('MODE=' + $patchMode)
     exit 0
 }
 
 Stop-QClawProcess
+if ($skillHubFixMode -eq 'PATCH') {
+    Copy-Item -LiteralPath $skillHubFixState.FilePath -Destination $skillHubFixBackup -Force
+    [System.IO.File]::WriteAllText($skillHubFixState.FilePath, $skillHubFixedContent, [System.Text.UTF8Encoding]::new($false))
+    $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
+    if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
+        throw 'skillhub-installer regex 修补写回校验失败。'
+    }
+}
 Copy-Item -LiteralPath $asarPath -Destination $backup -Force
 $patchResult = Write-AsarAndSyncEmbeddedIntegrity $asarPath $exePath $patched $patchedBuild.HeaderHash $bytes $currentRawHeaderHash '补丁'
 
@@ -995,4 +1176,10 @@ Write-Host ('BACKUP=' + $backup)
 Write-Host ('PATCHED_COPY=' + $patchedCopy)
 Write-Host ('SHA256=' + $patchResult.AsarHash)
 Write-Host ('ASAR_HEADER_SHA256=' + $patchResult.EmbeddedHeaderHash)
+if ($skillHubFixMode -eq 'PATCH') {
+    Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+    Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
+    Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+}
+Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
 Write-Host ('MODE=' + $patchMode)
