@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.1.19',
+    [string]$ExpectedDisplayVersion = '0.1.20',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -121,11 +121,12 @@ function Get-SkillHubRegexFixState([string]$installRoot, [string]$fileVersion, [
     $legacyRuntimeHits = Get-TextHitCount $content $skillHubRegexFixLegacyRuntimePattern
     $patchedRuntimeHits = Get-TextHitCount $content $skillHubRegexFixPatchedRuntimePattern
     $legacySchemaHits = Get-TextHitCount $content $skillHubRegexFixLegacySchemaPattern
+    $transitionalSchemaHits = Get-TextHitCount $content $skillHubRegexFixTransitionalSchemaPattern
     $patchedSchemaHits = Get-TextHitCount $content $skillHubRegexFixPatchedSchemaPattern
 
-    $featureRecognized = (($legacyRuntimeHits + $patchedRuntimeHits) -eq 1 -and ($legacySchemaHits + $patchedSchemaHits) -eq 1)
-    $alreadyFixed = ($legacyRuntimeHits -eq 0 -and $legacySchemaHits -eq 0 -and $patchedRuntimeHits -eq 1 -and $patchedSchemaHits -eq 1)
-    $requiresFix = ($featureRecognized -and (($legacyRuntimeHits -eq 1) -or ($legacySchemaHits -eq 1)))
+    $featureRecognized = (($legacyRuntimeHits + $patchedRuntimeHits) -eq 1 -and ($legacySchemaHits + $transitionalSchemaHits + $patchedSchemaHits) -eq 1)
+    $alreadyFixed = ($legacyRuntimeHits -eq 0 -and $patchedRuntimeHits -eq 1 -and $legacySchemaHits -eq 0 -and $transitionalSchemaHits -eq 0 -and $patchedSchemaHits -eq 1)
+    $requiresFix = ($featureRecognized -and ($patchedRuntimeHits -ne 1 -or $patchedSchemaHits -ne 1))
 
     return [pscustomobject]@{
         FilePath = $targetFile
@@ -139,6 +140,7 @@ function Get-SkillHubRegexFixState([string]$installRoot, [string]$fileVersion, [
         LegacyRuntimeHits = $legacyRuntimeHits
         PatchedRuntimeHits = $patchedRuntimeHits
         LegacySchemaHits = $legacySchemaHits
+        TransitionalSchemaHits = $transitionalSchemaHits
         PatchedSchemaHits = $patchedSchemaHits
     }
 }
@@ -154,6 +156,7 @@ function New-SkillHubRegexFixedContent([psobject]$state) {
     $updated = [string]$state.Content
     $updated = $updated.Replace($skillHubRegexFixLegacyRuntimePattern, $skillHubRegexFixPatchedRuntimePattern)
     $updated = $updated.Replace($skillHubRegexFixLegacySchemaPattern, $skillHubRegexFixPatchedSchemaPattern)
+    $updated = $updated.Replace($skillHubRegexFixTransitionalSchemaPattern, $skillHubRegexFixPatchedSchemaPattern)
     return $updated
 }
 
@@ -691,13 +694,15 @@ $replaceText = 'key:"other",label: "其他"'
 $guardTexts = @(
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
     'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
-    'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}'
+    'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
+    'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}'
 )
 $skillHubRegexFixRelativePath = 'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
-$skillHubRegexFixSupportedVersions = @('0.1.19')
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
+$skillHubRegexFixTransitionalSchemaPattern = 'pattern: "^[\\w\\-\\.]{1,128}$",'
 $skillHubRegexFixPatchedSchemaPattern = 'pattern: "^[A-Za-z0-9_.-]{1,128}$",'
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
@@ -1059,6 +1064,7 @@ if ($skillHubFixMode -eq 'PATCH') {
     $verifySkillHubFixed = [System.IO.File]::ReadAllText($skillHubFixFixedCopy)
     if ((Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixTransitionalSchemaPattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
         (Get-TextHitCount $verifySkillHubFixed $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
         throw 'skillhub fixed 副本校验失败：未写入唯一兼容特征。'
@@ -1086,6 +1092,7 @@ if ($patchMode -eq 'SKILLHUB_FIX_ONLY') {
     $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
     if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixTransitionalSchemaPattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
         throw 'skillhub-installer regex 修补写回校验失败。'
@@ -1161,6 +1168,7 @@ if ($skillHubFixMode -eq 'PATCH') {
     $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
     if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixTransitionalSchemaPattern) -gt 0 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
         (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
         throw 'skillhub-installer regex 修补写回校验失败。'

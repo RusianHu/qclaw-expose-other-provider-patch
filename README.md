@@ -7,21 +7,21 @@
 ## 功能
 
 - 自动识别 `QClaw` 安装目录
-- 默认校验目标版本为 `0.1.19`
+- 默认校验目标版本为 `0.1.20`
 - 使用等长原位补丁修改 `resources/app.asar`
 - 同步修复 ASAR 内部文件完整性记录与 `QClaw.exe` 内嵌 `ELECTRONASAR` 头部哈希
-- 对 `QClaw 0.1.19` 自动执行 `skillhub-installer.ts` 的 regex 兼容热修补
+- 对 `QClaw 0.1.19 / 0.1.20` 自动执行 `skillhub-installer.ts` 的 regex 兼容热修补
 - 提供状态探测、干跑、正式补丁、反修补、基于备份回滚
 - 可自动修复“已补丁但完整性未同步”的旧补丁状态
 - 备份与副本统一输出到脚本同级子目录 `QClawPatches`
 
 ## 适用范围
 
-- 默认面向 `QClaw 0.1.19`
+- 默认面向 `QClaw 0.1.20`
 - 保留对旧 `0.1.16 / 0.1.13` guard 特征的兼容识别
-- 已新增 `0.1.19` 的 `other guard` 特征兼容识别
-- 已内嵌 `0.1.19` 的 `skillhub_install` schema regex 兼容修复
-- 其他版本需要先执行状态探测或干跑，并谨慎配合 `-AllowUnknownVersion`
+- 已新增 `0.1.19 / 0.1.20` 的 `other guard` 特征兼容识别
+- 已内嵌 `0.1.19 / 0.1.20` 的 `skillhub_install` regex 兼容修复
+- 其中 `0.1.20` 已兼容 runtime 仍旧旧式、schema 已收敛为 `^[\\w\\-\\.]{1,128}$` 的过渡状态
 
 ## 使用方法
 
@@ -74,9 +74,9 @@
 
 - 目标位于 `Program Files` 时，正式补丁、反修补、回滚都必须使用管理员 PowerShell
 - 该补丁是替换现有槽位，不是在列表末尾新增真正的新项
-- `QClaw 0.1.19` 已启用 Electron ASAR 完整性校验；仅修改 `resources/app.asar` 而不同步完整性元数据，会导致程序无法启动
+- `QClaw 0.1.19 / 0.1.20` 已启用 Electron ASAR 完整性校验；仅修改 `resources/app.asar` 而不同步完整性元数据，会导致程序无法启动
 - 当前脚本会同步更新 ASAR 头部中的目标文件完整性记录，并回写 `QClaw.exe` 内嵌的 `ELECTRONASAR` 头部哈希
-- 对 `skillhub_install` 的 regex 修复不是外置二次脚本，而是主脚本在同一执行流内按版本/特征自动判定后顺带执行
+- 对 `skillhub_install` 的 regex 修复不是外置二次脚本，而是主脚本在同一执行流内按版本/特征自动判定后顺带执行；`0.1.20` 的过渡 schema 也已纳入兼容识别
 - `-DryRun` 在 `app.asar` 已补丁但 `skillhub-installer.ts` 未修补时，会返回 `MODE=SKILLHUB_FIX_ONLY`
 - 若历史上曾应用过旧版错误补丁，重新执行正式补丁会自动进入修复模式
 - 软件更新后大概率需要重新评估兼容性
