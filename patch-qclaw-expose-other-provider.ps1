@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.1.20',
+    [string]$ExpectedDisplayVersion = '0.1.22',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -694,11 +694,12 @@ $replaceText = 'key:"other",label: "其他"'
 $guardTexts = @(
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
     'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
+    'if(v.value==="other"){if(!g.value)return void Ze.warning("请输入 Base URL");if(!h.value)return void Ze.warning("请输入模型名称")}else if(!m.value)return void Ze.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}'
 )
 $skillHubRegexFixRelativePath = 'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
-$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20')
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
