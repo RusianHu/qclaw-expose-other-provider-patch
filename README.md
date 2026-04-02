@@ -1,6 +1,6 @@
 # QClaw expose-other-provider patch
 
-一个面向 **QClaw** 的修补脚本，用于把“大模型设置”中的 doubao 选项替换为 “其他” ，从而进入程序内置但默认未暴露的 custom provider 分支，允许使用第三方 openai-completions 协议的模型。
+一个面向 **QClaw** 的修补脚本，用于把“大模型设置”中的 doubao 选项替换为 “其他” ，从而进入程序内置但默认未暴露的 custom provider 分支，允许使用第三方 `Openai-Completions` 协议的模型。
 
 <img width="1200" height="800" alt="image" src="https://github.com/user-attachments/assets/14a173e6-689e-43d4-bb86-869fc2c0c23f" />
 
