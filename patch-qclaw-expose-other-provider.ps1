@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.1.22',
+    [string]$ExpectedDisplayVersion = '0.2.1',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -92,8 +92,205 @@ function Get-TextHitCount([string]$haystack, [string]$needle) {
     return $count
 }
 
+function Get-OneLineText([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return ''
+    }
+    return ([regex]::Replace($text, '\s+', ' ').Trim())
+}
+
+function Get-NormalizedNpmVersion([string]$versionSpec, [string]$fallbackVersion) {
+    if ($versionSpec -match '(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)') {
+        return $matches[1]
+    }
+    return $fallbackVersion
+}
+
+function Test-SharpImport([string]$openClawRoot) {
+    $script = "import('sharp').then(m=>{const s=m.default??m; console.log('SHARP_IMPORT_OK', typeof s);}).catch(err=>{console.error('ERRCODE=' + ((err&&err.code)?err.code:'UNKNOWN')); console.error('ERRMSG=' + ((err&&err.message)?err.message:String(err))); process.exit(1);})"
+    $output = ''
+    $exitCode = 0
+
+    Push-Location $openClawRoot
+    try {
+        $output = (& node -e $script 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    if ($exitCode -eq 0) {
+        return [pscustomobject]@{
+            Success = $true
+            Code = 'sharp_import_ok'
+            Message = 'sharp_import_ok'
+        }
+    }
+
+    $normalizedOutput = Get-OneLineText $output
+    $errorCode = if ($normalizedOutput -match 'ERRCODE=([A-Za-z0-9_]+)') {
+        $matches[1].ToLowerInvariant()
+    } else {
+        'import_failed'
+    }
+
+    return [pscustomobject]@{
+        Success = $false
+        Code = $errorCode
+        Message = $normalizedOutput
+    }
+}
+
+function Get-SharpFixState([string]$installRoot) {
+    $openClawRoot = Join-Path $installRoot 'resources\openclaw'
+    $packageJsonPath = Join-Path $openClawRoot 'package.json'
+    $moduleDirectory = Join-Path $openClawRoot 'node_modules\sharp'
+    $state = [ordered]@{
+        InstallRoot = $installRoot
+        OpenClawRoot = $openClawRoot
+        PackageJsonPath = $packageJsonPath
+        ModuleDirectory = $moduleDirectory
+        OpenClawExists = (Test-Path -LiteralPath $openClawRoot)
+        PackageJsonExists = (Test-Path -LiteralPath $packageJsonPath)
+        ModuleDirectoryExists = (Test-Path -LiteralPath $moduleDirectory)
+        PackageDeclared = $false
+        DeclaredVersion = $null
+        TargetVersion = $sharpFallbackVersion
+        NodeAvailable = $false
+        NpmAvailable = $false
+        ImportCheckAttempted = $false
+        ImportOk = $false
+        RequiresFix = $false
+        State = 'SKIP_NO_OPENCLAW'
+        Detail = 'openclaw_root_missing'
+        ImportMessage = ''
+    }
+
+    if (-not $state.OpenClawExists) {
+        return [pscustomobject]$state
+    }
+
+    if (-not $state.PackageJsonExists) {
+        $state.State = 'SKIP_NO_PACKAGE_JSON'
+        $state.Detail = 'package_json_missing'
+        return [pscustomobject]$state
+    }
+
+    try {
+        $packageJson = [System.IO.File]::ReadAllText($packageJsonPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    } catch {
+        $state.State = 'SKIP_INVALID_PACKAGE_JSON'
+        $state.Detail = 'package_json_parse_failed'
+        $state.ImportMessage = (Get-OneLineText $_.Exception.Message)
+        return [pscustomobject]$state
+    }
+
+    $sharpVersionSpec = [string]$packageJson.dependencies.sharp
+    if ([string]::IsNullOrWhiteSpace($sharpVersionSpec)) {
+        $sharpVersionSpec = [string]$packageJson.optionalDependencies.sharp
+    }
+    if ([string]::IsNullOrWhiteSpace($sharpVersionSpec)) {
+        $state.State = 'SKIP_NOT_DECLARED'
+        $state.Detail = 'sharp_not_declared'
+        return [pscustomobject]$state
+    }
+
+    $state.PackageDeclared = $true
+    $state.DeclaredVersion = $sharpVersionSpec
+    $state.TargetVersion = Get-NormalizedNpmVersion $sharpVersionSpec $sharpFallbackVersion
+    $state.NodeAvailable = ($null -ne (Get-Command node -ErrorAction SilentlyContinue))
+    $state.NpmAvailable = ($null -ne (Get-Command npm -ErrorAction SilentlyContinue))
+
+    if (-not $state.NodeAvailable) {
+        $state.State = 'SKIP_NO_NODE'
+        $state.Detail = 'node_not_found'
+        return [pscustomobject]$state
+    }
+
+    $state.ImportCheckAttempted = $true
+    $importState = Test-SharpImport $openClawRoot
+    $state.ImportOk = $importState.Success
+    $state.ImportMessage = $importState.Message
+    if ($importState.Success) {
+        $state.State = 'OK'
+        $state.Detail = 'sharp_import_ok'
+        return [pscustomobject]$state
+    }
+
+    if (-not $state.NpmAvailable) {
+        $state.State = 'BROKEN_NO_NPM'
+        $state.Detail = 'npm_not_found'
+        return [pscustomobject]$state
+    }
+
+    $state.RequiresFix = $true
+    $state.State = 'REPAIR_REQUIRED'
+    $state.Detail = $importState.Code
+    return [pscustomobject]$state
+}
+
+function Invoke-SharpRepair([psobject]$state) {
+    if (-not $state.RequiresFix) {
+        return $state
+    }
+    if (-not $state.NodeAvailable) {
+        throw 'sharp 自修复失败：未找到 node，无法执行导入校验。'
+    }
+    if (-not $state.NpmAvailable) {
+        throw 'sharp 自修复失败：未找到 npm，无法安装 sharp。'
+    }
+
+    Write-Step ('执行 sharp 运行时自修复 version=' + $state.TargetVersion)
+    Write-Step ('sharp 工作目录=' + $state.OpenClawRoot)
+
+    Push-Location $state.OpenClawRoot
+    try {
+        & npm install ('sharp@' + $state.TargetVersion) '--no-save' '--package-lock=false' '--omit=dev' '--legacy-peer-deps' ('--registry=' + $sharpInstallRegistry)
+        if ($LASTEXITCODE -ne 0) {
+            throw ('npm install sharp 失败，退出码=' + $LASTEXITCODE)
+        }
+    } finally {
+        Pop-Location
+    }
+
+    $updatedState = Get-SharpFixState $state.InstallRoot
+    if (-not $updatedState.ImportOk) {
+        throw ('sharp 自修复后校验失败：state=' + $updatedState.State + ' detail=' + $updatedState.Detail)
+    }
+    return $updatedState
+}
+
+function Write-SharpStateSummary([psobject]$state) {
+    if (-not $state) {
+        return
+    }
+
+    Write-Host ('SHARP_STATE=' + $state.State)
+    Write-Host ('SHARP_DETAIL=' + $state.Detail)
+    if ($state.TargetVersion) {
+        Write-Host ('SHARP_VERSION=' + $state.TargetVersion)
+    }
+    if ($state.OpenClawRoot) {
+        Write-Host ('SHARP_OPENCLAW_ROOT=' + $state.OpenClawRoot)
+    }
+    if ($state.ImportCheckAttempted) {
+        Write-Host ('SHARP_IMPORT_OK=' + ($(if ($state.ImportOk) { 'YES' } else { 'NO' })))
+    }
+    Write-Host ('SHARP_MODULE_DIR=' + ($(if ($state.ModuleDirectoryExists) { 'YES' } else { 'NO' })))
+}
+
+function Resolve-SkillHubRegexFixTargetFile([string]$installRoot) {
+    foreach ($relativePath in $skillHubRegexFixRelativePaths) {
+        $candidate = Join-Path $installRoot $relativePath
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+    return (Join-Path $installRoot $skillHubRegexFixRelativePaths[0])
+}
+
 function Get-SkillHubRegexFixState([string]$installRoot, [string]$fileVersion, [string]$productVersion, [bool]$allowUnknownVersion) {
-    $targetFile = Join-Path $installRoot $skillHubRegexFixRelativePath
+    $targetFile = Resolve-SkillHubRegexFixTargetFile $installRoot
 
     $versionEligible = $false
     foreach ($version in $skillHubRegexFixSupportedVersions) {
@@ -689,22 +886,33 @@ if ($PrintDetectedRoot) {
     exit 0
 }
 
-$searchText = 'key:"doubao",label:"豆包"'
-$replaceText = 'key:"other",label: "其他"'
+$searchText = 'key:"doubao",label:"火山引擎（豆包）"'
+$replaceTextCore = 'key:"other",label:"其他"'
+$replacePaddingLength = [System.Text.Encoding]::UTF8.GetByteCount($searchText) - [System.Text.Encoding]::UTF8.GetByteCount($replaceTextCore)
+if ($replacePaddingLength -lt 0) {
+    throw '内部错误：v0.2.1 替换串长度超过原始槽位长度，无法执行等长原位替换。'
+}
+$replaceText = $replaceTextCore + (' ' * $replacePaddingLength)
 $guardTexts = @(
+    'if(f.value==="other"){if(!g.value)return void Xe.warning("请输入 Base URL");if(!h.value)return void Xe.warning("请输入模型名称")}else if(!m.value)return void Xe.warning("请选择或输入模型名称")}',
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
     'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
     'if(v.value==="other"){if(!g.value)return void Ze.warning("请输入 Base URL");if(!h.value)return void Ze.warning("请输入模型名称")}else if(!m.value)return void Ze.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}'
 )
-$skillHubRegexFixRelativePath = 'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
-$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22')
+$skillHubRegexFixRelativePaths = @(
+    'resources\openclaw\config\extensions\qclaw-plugin\packages\content-plugin\src\skillhub-installer.ts',
+    'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
+)
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
 $skillHubRegexFixTransitionalSchemaPattern = 'pattern: "^[\\w\\-\\.]{1,128}$",'
 $skillHubRegexFixPatchedSchemaPattern = 'pattern: "^[A-Za-z0-9_.-]{1,128}$",'
+$sharpFallbackVersion = '0.34.5'
+$sharpInstallRegistry = 'https://registry.npmmirror.com'
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
 $replace = [System.Text.Encoding]::UTF8.GetBytes($replaceText)
@@ -809,6 +1017,22 @@ if (-not $AllowUnknownVersion) {
     }
 }
 
+$sharpFixState = Get-SharpFixState $resolvedRoot
+$sharpFixMode = if ($sharpFixState.RequiresFix) {
+    'PATCH'
+} elseif ($sharpFixState.ImportOk) {
+    'ALREADY_OK'
+} else {
+    'SKIP'
+}
+if ($sharpFixState.State -like 'BROKEN*') {
+    Write-WarnMsg ('sharp 运行时状态异常，当前无法自动修复：' + $sharpFixState.Detail)
+} elseif ($sharpFixState.State -like 'SKIP_*') {
+    Write-Step ('sharp 自修复已跳过：' + $sharpFixState.Detail)
+} elseif ($sharpFixMode -eq 'PATCH') {
+    Write-WarnMsg ('检测到 sharp 导入失败，将在写入流程中尝试自修复：' + $sharpFixState.Detail)
+}
+
 $skillHubFixState = Get-SkillHubRegexFixState $resolvedRoot $fv $pv ([bool]$AllowUnknownVersion)
 if ($skillHubFixState.Exists -and $skillHubFixState.FixAllowed -and -not $skillHubFixState.FeatureRecognized) {
     Write-WarnMsg ('skillhub regex 修复未命中兼容特征，已跳过：' + $skillHubFixState.FilePath)
@@ -893,6 +1117,8 @@ if ($Status) {
         Write-Host ('PATCH_OFFSET=' + $posReplace)
         Write-Host ('TARGET_PATH=' + $replaceIntegrityState.Path)
         Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+        Write-Host ('SHARP_FIX=' + $sharpFixMode)
+        Write-SharpStateSummary $sharpFixState
         exit 0
     }
     if ($posSearch -ge 0 -and $posReplace -lt 0) {
@@ -914,6 +1140,8 @@ if ($Status) {
         Write-Host ('SEARCH_OFFSET=' + $posSearch)
         Write-Host ('TARGET_PATH=' + $searchIntegrityState.Path)
         Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+        Write-Host ('SHARP_FIX=' + $sharpFixMode)
+        Write-SharpStateSummary $sharpFixState
         exit 0
     }
     Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
@@ -1020,8 +1248,14 @@ $targetOffset = $posSearch
 if ($posReplace -ge 0 -and $posSearch -lt 0) {
     $patchedIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posReplace
     if ($patchedIntegrityState.IntegrityMatch -and $currentEmbeddedHeaderHash -ceq $currentRawHeaderHash) {
-        if ($skillHubFixMode -eq 'PATCH') {
+        if ($skillHubFixMode -eq 'PATCH' -and $sharpFixMode -eq 'PATCH') {
+            $patchMode = 'SKILLHUB_AND_SHARP_FIX_ONLY'
+            $targetOffset = $posReplace
+        } elseif ($skillHubFixMode -eq 'PATCH') {
             $patchMode = 'SKILLHUB_FIX_ONLY'
+            $targetOffset = $posReplace
+        } elseif ($sharpFixMode -eq 'PATCH') {
+            $patchMode = 'SHARP_FIX_ONLY'
             $targetOffset = $posReplace
         } else {
             Write-Host 'ALREADY_PATCHED' -ForegroundColor Yellow
@@ -1031,6 +1265,8 @@ if ($posReplace -ge 0 -and $posSearch -lt 0) {
             Write-Host ('TARGET_PATH=' + $patchedIntegrityState.Path)
             Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
             Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
+            Write-Host ('SHARP_FIX=' + $sharpFixMode)
+            Write-SharpStateSummary $sharpFixState
             exit 0
         }
     } else {
@@ -1072,37 +1308,62 @@ if ($skillHubFixMode -eq 'PATCH') {
     }
 }
 
-if ($patchMode -eq 'SKILLHUB_FIX_ONLY') {
-    Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex'
-    Write-Step ('skillhub 备份将保存到 ' + $skillHubFixBackup)
-    Write-Step ('skillhub fixed 副本将保存到 ' + $skillHubFixFixedCopy)
+if ($patchMode -eq 'SKILLHUB_FIX_ONLY' -or $patchMode -eq 'SHARP_FIX_ONLY' -or $patchMode -eq 'SKILLHUB_AND_SHARP_FIX_ONLY') {
+    if ($patchMode -eq 'SKILLHUB_AND_SHARP_FIX_ONLY') {
+        Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex 与 sharp 依赖'
+    } elseif ($patchMode -eq 'SKILLHUB_FIX_ONLY') {
+        Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex'
+    } else {
+        Write-Step '检测到 app.asar 已补丁，将单独修复 sharp 依赖'
+    }
+    if ($skillHubFixMode -eq 'PATCH') {
+        Write-Step ('skillhub 备份将保存到 ' + $skillHubFixBackup)
+        Write-Step ('skillhub fixed 副本将保存到 ' + $skillHubFixFixedCopy)
+    }
+    if ($sharpFixMode -eq 'PATCH') {
+        Write-Step ('sharp 将修复到 ' + $sharpFixState.TargetVersion + ' @ ' + $sharpFixState.OpenClawRoot)
+    }
 
     if ($DryRun) {
         Write-Host 'DRY_RUN_OK' -ForegroundColor Green
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
-        Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
-        Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
-        Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
+        if ($skillHubFixMode -eq 'PATCH') {
+            Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+            Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+            Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
+        }
+        Write-Host ('SHARP_FIX=' + $sharpFixMode)
+        Write-SharpStateSummary $sharpFixState
         Write-Host ('MODE=' + $patchMode)
         exit 0
     }
 
     Stop-QClawProcess
-    Copy-Item -LiteralPath $skillHubFixState.FilePath -Destination $skillHubFixBackup -Force
-    [System.IO.File]::WriteAllText($skillHubFixState.FilePath, $skillHubFixedContent, [System.Text.UTF8Encoding]::new($false))
-    $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
-    if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
-        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
-        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixTransitionalSchemaPattern) -gt 0 -or
-        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
-        (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
-        throw 'skillhub-installer regex 修补写回校验失败。'
+    if ($skillHubFixMode -eq 'PATCH') {
+        Copy-Item -LiteralPath $skillHubFixState.FilePath -Destination $skillHubFixBackup -Force
+        [System.IO.File]::WriteAllText($skillHubFixState.FilePath, $skillHubFixedContent, [System.Text.UTF8Encoding]::new($false))
+        $verifySkillHubWrite = [System.IO.File]::ReadAllText($skillHubFixState.FilePath)
+        if ((Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacyRuntimePattern) -gt 0 -or
+            (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixLegacySchemaPattern) -gt 0 -or
+            (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixTransitionalSchemaPattern) -gt 0 -or
+            (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedRuntimePattern) -ne 1 -or
+            (Get-TextHitCount $verifySkillHubWrite $skillHubRegexFixPatchedSchemaPattern) -ne 1) {
+            throw 'skillhub-installer regex 修补写回校验失败。'
+        }
+    }
+    if ($sharpFixMode -eq 'PATCH') {
+        $sharpFixState = Invoke-SharpRepair $sharpFixState
+        $sharpFixMode = 'ALREADY_OK'
     }
 
     Write-Host 'PATCH_OK' -ForegroundColor Green
-    Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
-    Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
-    Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+    if ($skillHubFixMode -eq 'PATCH') {
+        Write-Host ('SKILLHUB_TARGET=' + $skillHubFixState.FilePath)
+        Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
+        Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
+    }
+    Write-Host ('SHARP_FIX=' + $sharpFixMode)
+    Write-SharpStateSummary $sharpFixState
     Write-Host ('MODE=' + $patchMode)
     exit 0
 }
@@ -1158,6 +1419,8 @@ if ($DryRun) {
         Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
     }
     Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
+    Write-Host ('SHARP_FIX=' + $sharpFixMode)
+    Write-SharpStateSummary $sharpFixState
     Write-Host ('MODE=' + $patchMode)
     exit 0
 }
@@ -1175,6 +1438,10 @@ if ($skillHubFixMode -eq 'PATCH') {
         throw 'skillhub-installer regex 修补写回校验失败。'
     }
 }
+if ($sharpFixMode -eq 'PATCH') {
+    $sharpFixState = Invoke-SharpRepair $sharpFixState
+    $sharpFixMode = 'ALREADY_OK'
+}
 Copy-Item -LiteralPath $asarPath -Destination $backup -Force
 $patchResult = Write-AsarAndSyncEmbeddedIntegrity $asarPath $exePath $patched $patchedBuild.HeaderHash $bytes $currentRawHeaderHash '补丁'
 
@@ -1191,4 +1458,6 @@ if ($skillHubFixMode -eq 'PATCH') {
     Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
 }
 Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
+Write-Host ('SHARP_FIX=' + $sharpFixMode)
+Write-SharpStateSummary $sharpFixState
 Write-Host ('MODE=' + $patchMode)
