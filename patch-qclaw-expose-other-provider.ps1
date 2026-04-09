@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.2.1',
+    [string]$ExpectedDisplayVersion = '0.2.4',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -890,22 +890,25 @@ $searchText = 'key:"doubao",label:"火山引擎（豆包）"'
 $replaceTextCore = 'key:"other",label:"其他"'
 $replacePaddingLength = [System.Text.Encoding]::UTF8.GetByteCount($searchText) - [System.Text.Encoding]::UTF8.GetByteCount($replaceTextCore)
 if ($replacePaddingLength -lt 0) {
-    throw '内部错误：v0.2.1 替换串长度超过原始槽位长度，无法执行等长原位替换。'
+    throw '内部错误：v0.2.4 替换串长度超过原始槽位长度，无法执行等长原位替换。'
 }
 $replaceText = $replaceTextCore + (' ' * $replacePaddingLength)
+$remoteOverrideSearchText = 't.data&&t.data.length>0&&(Eo=t.data,hu(Eo,"modelApi"))'
+$remoteOverrideReplaceText = 't.data&&t.data.length<0&&(Eo=t.data,hu(Eo,"modelApi"))'
 $guardTexts = @(
     'if(f.value==="other"){if(!g.value)return void Xe.warning("请输入 Base URL");if(!h.value)return void Xe.warning("请输入模型名称")}else if(!m.value)return void Xe.warning("请选择或输入模型名称")}',
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
     'if(v.value==="other"){if(!h.value)return void ze.warning("请输入 Base URL");if(!m.value)return void ze.warning("请输入模型名称")}else if(!w.value)return void ze.warning("请选择或输入模型名称")}',
     'if(v.value==="other"){if(!g.value)return void Ze.warning("请输入 Base URL");if(!h.value)return void Ze.warning("请输入模型名称")}else if(!m.value)return void Ze.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
-    'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}'
+    'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}',
+    'if(f.value==="other"){if(!v.value)return void qe.warning("请输入 Base URL");if(!g.value)return void qe.warning("请输入模型名称")}else if(!h.value)return void qe.warning("请选择或输入模型名称")}'
 )
 $skillHubRegexFixRelativePaths = @(
     'resources\openclaw\config\extensions\qclaw-plugin\packages\content-plugin\src\skillhub-installer.ts',
     'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
 )
-$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1')
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1', '0.2.4')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
@@ -916,9 +919,14 @@ $sharpInstallRegistry = 'https://registry.npmmirror.com'
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
 $replace = [System.Text.Encoding]::UTF8.GetBytes($replaceText)
+$remoteOverrideSearch = [System.Text.Encoding]::UTF8.GetBytes($remoteOverrideSearchText)
+$remoteOverrideReplace = [System.Text.Encoding]::UTF8.GetBytes($remoteOverrideReplaceText)
 
 if ($search.Length -ne $replace.Length) {
     throw "内部错误：替换串长度不一致 [$($search.Length)] vs [$($replace.Length)]"
+}
+if ($remoteOverrideSearch.Length -ne $remoteOverrideReplace.Length) {
+    throw "内部错误：modelApi 远端覆盖修补串长度不一致 [$($remoteOverrideSearch.Length)] vs [$($remoteOverrideReplace.Length)]"
 }
 
 if ($Restore) {
@@ -1056,6 +1064,21 @@ $posSearch = Find-Bytes $bytes $search 0
 $posSearch2 = if ($posSearch -ge 0) { Find-Bytes $bytes $search ($posSearch + 1) } else { -1 }
 $posReplace = Find-Bytes $bytes $replace 0
 $posReplace2 = if ($posReplace -ge 0) { Find-Bytes $bytes $replace ($posReplace + 1) } else { -1 }
+$posRemoteSearch = Find-Bytes $bytes $remoteOverrideSearch 0
+$posRemoteSearch2 = if ($posRemoteSearch -ge 0) { Find-Bytes $bytes $remoteOverrideSearch ($posRemoteSearch + 1) } else { -1 }
+$posRemoteReplace = Find-Bytes $bytes $remoteOverrideReplace 0
+$posRemoteReplace2 = if ($posRemoteReplace -ge 0) { Find-Bytes $bytes $remoteOverrideReplace ($posRemoteReplace + 1) } else { -1 }
+$remoteOverrideFixMode = if ($posRemoteSearch2 -ge 0 -or $posRemoteReplace2 -ge 0) {
+    'AMBIGUOUS'
+} elseif ($posRemoteSearch -ge 0 -and $posRemoteReplace -lt 0) {
+    'PATCH'
+} elseif ($posRemoteReplace -ge 0 -and $posRemoteSearch -lt 0) {
+    'ALREADY_FIXED'
+} elseif ($posRemoteSearch -lt 0 -and $posRemoteReplace -lt 0) {
+    'SKIP_FEATURE'
+} else {
+    'MIXED'
+}
 $guardMatch = Find-FirstTextMatch $bytes $guardTexts
 $posGuard = if ($guardMatch) { $guardMatch.Position } else { -1 }
 $currentRawHeaderHash = Get-AsarRawHeaderHash $bytes
@@ -1088,6 +1111,28 @@ if ($Status) {
         Write-Host ('REPLACE_OFFSET_2=' + $posReplace2)
         exit 3
     }
+    if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+        Write-Host 'STATUS=AMBIGUOUS' -ForegroundColor Red
+        Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
+        Write-Host ('APP_ASAR=' + $asarPath)
+        Write-Host ('EXE=' + $exePath)
+        Write-Host ('DETAIL=multiple_remote_override_hits')
+        if ($posRemoteSearch -ge 0) { Write-Host ('REMOTE_SEARCH_OFFSET_1=' + $posRemoteSearch) }
+        if ($posRemoteSearch2 -ge 0) { Write-Host ('REMOTE_SEARCH_OFFSET_2=' + $posRemoteSearch2) }
+        if ($posRemoteReplace -ge 0) { Write-Host ('REMOTE_REPLACE_OFFSET_1=' + $posRemoteReplace) }
+        if ($posRemoteReplace2 -ge 0) { Write-Host ('REMOTE_REPLACE_OFFSET_2=' + $posRemoteReplace2) }
+        exit 3
+    }
+    if ($remoteOverrideFixMode -eq 'MIXED') {
+        Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
+        Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
+        Write-Host ('APP_ASAR=' + $asarPath)
+        Write-Host ('EXE=' + $exePath)
+        Write-Host ('DETAIL=remote_override_mixed_state')
+        Write-Host ('REMOTE_SEARCH_OFFSET=' + $posRemoteSearch)
+        Write-Host ('REMOTE_REPLACE_OFFSET=' + $posRemoteReplace)
+        exit 4
+    }
     if ($currentEmbeddedHeaderHash -cne $currentRawHeaderHash) {
         Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
@@ -1110,6 +1155,20 @@ if ($Status) {
             Write-Host ('TARGET_PATH=' + $replaceIntegrityState.Path)
             exit 4
         }
+        if ($remoteOverrideFixMode -eq 'PATCH') {
+            Write-Host 'STATUS=PATCHED_NEEDS_REMOTE_OVERRIDE_FIX' -ForegroundColor Yellow
+            Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
+            Write-Host ('APP_ASAR=' + $asarPath)
+            Write-Host ('EXE=' + $exePath)
+            Write-Host ('PATCH_OFFSET=' + $posReplace)
+            Write-Host ('REMOTE_OVERRIDE_SEARCH_OFFSET=' + $posRemoteSearch)
+            Write-Host ('TARGET_PATH=' + $replaceIntegrityState.Path)
+            Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+            Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
+            Write-Host ('SHARP_FIX=' + $sharpFixMode)
+            Write-SharpStateSummary $sharpFixState
+            exit 0
+        }
         Write-Host 'STATUS=PATCHED_OR_OPEN' -ForegroundColor Green
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1117,6 +1176,7 @@ if ($Status) {
         Write-Host ('PATCH_OFFSET=' + $posReplace)
         Write-Host ('TARGET_PATH=' + $replaceIntegrityState.Path)
         Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+        Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
         Write-Host ('SHARP_FIX=' + $sharpFixMode)
         Write-SharpStateSummary $sharpFixState
         exit 0
@@ -1140,6 +1200,7 @@ if ($Status) {
         Write-Host ('SEARCH_OFFSET=' + $posSearch)
         Write-Host ('TARGET_PATH=' + $searchIntegrityState.Path)
         Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+        Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
         Write-Host ('SHARP_FIX=' + $sharpFixMode)
         Write-SharpStateSummary $sharpFixState
         exit 0
@@ -1149,6 +1210,7 @@ if ($Status) {
     Write-Host ('APP_ASAR=' + $asarPath)
     Write-Host ('EXE=' + $exePath)
     Write-Host ('DETAIL=mixed_or_feature_mismatch')
+    Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
     exit 4
 }
 
@@ -1162,7 +1224,13 @@ if ($Unpatch) {
     if ($posSearch2 -ge 0) {
         throw "安全校验失败：原始定位串出现多次 [$posSearch, $posSearch2]，拒绝反修补。"
     }
-    if ($posSearch -ge 0 -and $posReplace -lt 0) {
+    if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+        throw '安全校验失败：modelApi 远端覆盖特征出现多次，拒绝反修补。'
+    }
+    if ($remoteOverrideFixMode -eq 'MIXED') {
+        throw '安全校验失败：modelApi 远端覆盖特征状态混杂，拒绝反修补。'
+    }
+    if ($posSearch -ge 0 -and $posReplace -lt 0 -and $remoteOverrideFixMode -ne 'ALREADY_FIXED') {
         $searchIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posSearch
         Write-Host 'ALREADY_UNPATCHED' -ForegroundColor Yellow
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1170,25 +1238,33 @@ if ($Unpatch) {
         Write-Host ('SEARCH_OFFSET=' + $posSearch)
         Write-Host ('TARGET_PATH=' + $searchIntegrityState.Path)
         Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+        Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
         exit 0
     }
-    if ($posReplace -lt 0) {
-        throw '特征校验失败：未找到已补丁 other 槽位，拒绝反修补。'
+    if ($posReplace -lt 0 -and $remoteOverrideFixMode -ne 'ALREADY_FIXED') {
+        throw '特征校验失败：未找到已补丁 other 槽位与 remote override 修补，拒绝反修补。'
     }
-    if ($posSearch -ge 0) {
+    if ($posSearch -ge 0 -and $posReplace -ge 0) {
         throw '特征校验失败：检测到原始 doubao 与已补丁 other 特征同时存在，状态混杂，拒绝反修补。'
     }
 
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = Join-Path $patchDir ('app.asar.' + $installTag + '.' + $timestamp + '.bak')
     $unpatchedCopy = Join-Path $patchDir ('app.asar.' + $installTag + '.' + $timestamp + '.unpatched')
+    $unpatchTargetOffset = if ($posReplace -ge 0) { $posReplace } elseif ($posRemoteReplace -ge 0) { $posRemoteReplace } else { -1 }
 
-    Write-Step ('命中偏移 replace=' + $posReplace + ' guard=' + $posGuard)
+    Write-Step ('命中偏移 replace=' + $posReplace + ' remoteReplace=' + $posRemoteReplace + ' guard=' + $posGuard)
     Write-Step ('备份将保存到 ' + $backup)
     Write-Step ('unpatched 副本将保存到 ' + $unpatchedCopy)
 
-    [byte[]]$unpatchedCandidate = New-ReplacedBytes $bytes $posReplace $search
-    $unpatchedBuild = Update-AsarIntegrityForModifiedOffset $unpatchedCandidate $posReplace
+    [byte[]]$unpatchedCandidate = $bytes
+    if ($posReplace -ge 0) {
+        $unpatchedCandidate = New-ReplacedBytes $unpatchedCandidate $posReplace $search
+    }
+    if ($posRemoteReplace -ge 0) {
+        $unpatchedCandidate = New-ReplacedBytes $unpatchedCandidate $posRemoteReplace $remoteOverrideSearch
+    }
+    $unpatchedBuild = Update-AsarIntegrityForModifiedOffset $unpatchedCandidate $unpatchTargetOffset
     [byte[]]$unpatched = $unpatchedBuild.Bytes
 
     Write-Step ('目标文件=' + $unpatchedBuild.TargetPath)
@@ -1200,10 +1276,15 @@ if ($Unpatch) {
     $verifyUnpatched = [System.IO.File]::ReadAllBytes($unpatchedCopy)
     $verifySearchPos = Find-Bytes $verifyUnpatched $search 0
     $verifyReplacePos = Find-Bytes $verifyUnpatched $replace 0
-    if ($verifySearchPos -lt 0 -or $verifyReplacePos -ge 0) {
+    $verifyRemoteSearchPos = Find-Bytes $verifyUnpatched $remoteOverrideSearch 0
+    $verifyRemoteReplacePos = Find-Bytes $verifyUnpatched $remoteOverrideReplace 0
+    if ($posReplace -ge 0 -and ($verifySearchPos -lt 0 -or $verifyReplacePos -ge 0)) {
         throw 'unpatched 副本校验失败：未恢复到原始 doubao 特征。'
     }
-    $verifyUnpatchedIntegrity = Get-AsarIntegrityStateForOffset $verifyUnpatched $posReplace
+    if ($posRemoteReplace -ge 0 -and ($verifyRemoteSearchPos -lt 0 -or $verifyRemoteReplacePos -ge 0)) {
+        throw 'unpatched 副本校验失败：未恢复 modelApi 远端覆盖原始特征。'
+    }
+    $verifyUnpatchedIntegrity = Get-AsarIntegrityStateForOffset $verifyUnpatched $unpatchTargetOffset
     if (-not $verifyUnpatchedIntegrity.IntegrityMatch) {
         throw 'unpatched 副本校验失败：目标文件的 ASAR 完整性记录未同步。'
     }
@@ -1216,6 +1297,7 @@ if ($Unpatch) {
         Write-Host ('WOULD_UPDATE_EXE=' + $exePath)
         Write-Host ('WOULD_WRITE_HEADER_SHA256=' + $unpatchedBuild.HeaderHash)
         Write-Host ('TARGET_PATH=' + $unpatchedBuild.TargetPath)
+        Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
         exit 0
     }
 
@@ -1230,6 +1312,7 @@ if ($Unpatch) {
     Write-Host ('UNPATCHED_COPY=' + $unpatchedCopy)
     Write-Host ('SHA256=' + $unpatchResult.AsarHash)
     Write-Host ('ASAR_HEADER_SHA256=' + $unpatchResult.EmbeddedHeaderHash)
+    Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
     exit 0
 }
 
@@ -1242,21 +1325,35 @@ if ($posReplace2 -ge 0) {
 if ($posSearch2 -ge 0) {
     throw "安全校验失败：原始定位串出现多次 [$posSearch, $posSearch2]，拒绝补丁。"
 }
+if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+    throw '安全校验失败：modelApi 远端覆盖特征出现多次，拒绝补丁。'
+}
+if ($remoteOverrideFixMode -eq 'MIXED') {
+    throw '安全校验失败：modelApi 远端覆盖特征状态混杂，拒绝补丁。'
+}
 $patchMode = 'PATCH'
 $targetOffset = $posSearch
 
 if ($posReplace -ge 0 -and $posSearch -lt 0) {
     $patchedIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posReplace
     if ($patchedIntegrityState.IntegrityMatch -and $currentEmbeddedHeaderHash -ceq $currentRawHeaderHash) {
-        if ($skillHubFixMode -eq 'PATCH' -and $sharpFixMode -eq 'PATCH') {
-            $patchMode = 'SKILLHUB_AND_SHARP_FIX_ONLY'
-            $targetOffset = $posReplace
-        } elseif ($skillHubFixMode -eq 'PATCH') {
-            $patchMode = 'SKILLHUB_FIX_ONLY'
-            $targetOffset = $posReplace
-        } elseif ($sharpFixMode -eq 'PATCH') {
-            $patchMode = 'SHARP_FIX_ONLY'
-            $targetOffset = $posReplace
+        $pendingFixModes = @()
+        if ($remoteOverrideFixMode -eq 'PATCH') {
+            $pendingFixModes += 'REMOTE_OVERRIDE'
+        }
+        if ($skillHubFixMode -eq 'PATCH') {
+            $pendingFixModes += 'SKILLHUB'
+        }
+        if ($sharpFixMode -eq 'PATCH') {
+            $pendingFixModes += 'SHARP'
+        }
+        if ($pendingFixModes.Count -gt 0) {
+            $patchMode = (($pendingFixModes -join '_AND_') + '_FIX_ONLY')
+            if ($remoteOverrideFixMode -eq 'PATCH') {
+                $targetOffset = $posRemoteSearch
+            } else {
+                $targetOffset = $posReplace
+            }
         } else {
             Write-Host 'ALREADY_PATCHED' -ForegroundColor Yellow
             Write-Host ('APP_ASAR=' + $asarPath)
@@ -1264,6 +1361,7 @@ if ($posReplace -ge 0 -and $posSearch -lt 0) {
             Write-Host ('PATCH_OFFSET=' + $posReplace)
             Write-Host ('TARGET_PATH=' + $patchedIntegrityState.Path)
             Write-Host ('ASAR_HEADER_SHA256=' + $currentRawHeaderHash)
+            Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
             Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
             Write-Host ('SHARP_FIX=' + $sharpFixMode)
             Write-SharpStateSummary $sharpFixState
@@ -1271,7 +1369,11 @@ if ($posReplace -ge 0 -and $posSearch -lt 0) {
         }
     } else {
         $patchMode = 'REPAIR_PATCHED'
-        $targetOffset = $posReplace
+        if ($remoteOverrideFixMode -eq 'PATCH') {
+            $targetOffset = $posRemoteSearch
+        } else {
+            $targetOffset = $posReplace
+        }
     }
 }
 
@@ -1308,14 +1410,15 @@ if ($skillHubFixMode -eq 'PATCH') {
     }
 }
 
-if ($patchMode -eq 'SKILLHUB_FIX_ONLY' -or $patchMode -eq 'SHARP_FIX_ONLY' -or $patchMode -eq 'SKILLHUB_AND_SHARP_FIX_ONLY') {
-    if ($patchMode -eq 'SKILLHUB_AND_SHARP_FIX_ONLY') {
-        Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex 与 sharp 依赖'
-    } elseif ($patchMode -eq 'SKILLHUB_FIX_ONLY') {
-        Write-Step '检测到 app.asar 已补丁，将单独修复 skillhub-installer regex'
-    } else {
-        Write-Step '检测到 app.asar 已补丁，将单独修复 sharp 依赖'
+if ($patchMode -like '*FIX_ONLY' -and $patchMode -notlike '*REMOTE_OVERRIDE*') {
+    $fixOnlyLabels = @()
+    if ($patchMode -like '*SKILLHUB*') {
+        $fixOnlyLabels += 'skillhub-installer regex'
     }
+    if ($patchMode -like '*SHARP*') {
+        $fixOnlyLabels += 'sharp 依赖'
+    }
+    Write-Step ('检测到 app.asar 已补丁，将单独修复 ' + (($fixOnlyLabels | Where-Object { $_ }) -join ' 与 '))
     if ($skillHubFixMode -eq 'PATCH') {
         Write-Step ('skillhub 备份将保存到 ' + $skillHubFixBackup)
         Write-Step ('skillhub fixed 副本将保存到 ' + $skillHubFixFixedCopy)
@@ -1332,6 +1435,7 @@ if ($patchMode -eq 'SKILLHUB_FIX_ONLY' -or $patchMode -eq 'SHARP_FIX_ONLY' -or $
             Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
             Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
         }
+        Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
         Write-Host ('SHARP_FIX=' + $sharpFixMode)
         Write-SharpStateSummary $sharpFixState
         Write-Host ('MODE=' + $patchMode)
@@ -1362,6 +1466,7 @@ if ($patchMode -eq 'SKILLHUB_FIX_ONLY' -or $patchMode -eq 'SHARP_FIX_ONLY' -or $
         Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
         Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
     }
+    Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
     Write-Host ('SHARP_FIX=' + $sharpFixMode)
     Write-SharpStateSummary $sharpFixState
     Write-Host ('MODE=' + $patchMode)
@@ -1374,18 +1479,22 @@ $patchedCopy = Join-Path $patchDir ('app.asar.' + $installTag + '.' + $timestamp
 
 if ($patchMode -eq 'REPAIR_PATCHED') {
     Write-Step ('检测到已补丁但完整性未同步，将执行修复写回 replace=' + $posReplace + ' guard=' + $posGuard)
+} elseif ($patchMode -like '*REMOTE_OVERRIDE*') {
+    Write-Step ('检测到 app.asar 已完成 provider 替换，但仍存在 modelApi 远端覆盖，将执行二阶段修补 remoteSearch=' + $posRemoteSearch + ' guard=' + $posGuard)
 } else {
     Write-Step ('命中偏移 search=' + $posSearch + ' guard=' + $posGuard)
 }
 Write-Step ('备份将保存到 ' + $backup)
 Write-Step ('patched 副本将保存到 ' + $patchedCopy)
 
-$patchedBuild = if ($patchMode -eq 'REPAIR_PATCHED') {
-    Update-AsarIntegrityForModifiedOffset $bytes $posReplace
-} else {
-    [byte[]]$patchedCandidate = New-ReplacedBytes $bytes $posSearch $replace
-    Update-AsarIntegrityForModifiedOffset $patchedCandidate $posSearch
+[byte[]]$patchedCandidate = $bytes
+if ($patchMode -eq 'PATCH') {
+    $patchedCandidate = New-ReplacedBytes $patchedCandidate $posSearch $replace
 }
+if ($remoteOverrideFixMode -eq 'PATCH') {
+    $patchedCandidate = New-ReplacedBytes $patchedCandidate $posRemoteSearch $remoteOverrideReplace
+}
+$patchedBuild = Update-AsarIntegrityForModifiedOffset $patchedCandidate $targetOffset
 
 [byte[]]$patched = $patchedBuild.Bytes
 Write-Step ('目标文件=' + $patchedBuild.TargetPath)
@@ -1397,8 +1506,13 @@ Write-Step ('ASAR 头部 SHA256=' + $patchedBuild.HeaderHash)
 $verifyPatched = [System.IO.File]::ReadAllBytes($patchedCopy)
 $verifyPos = Find-Bytes $verifyPatched $replace 0
 $verifySearchPos = Find-Bytes $verifyPatched $search 0
+$verifyRemoteSearchPos = Find-Bytes $verifyPatched $remoteOverrideSearch 0
+$verifyRemoteReplacePos = Find-Bytes $verifyPatched $remoteOverrideReplace 0
 if ($verifyPos -lt 0 -or $verifySearchPos -ge 0) {
     throw 'patched 副本校验失败：未写入唯一目标特征。'
+}
+if ($remoteOverrideFixMode -eq 'PATCH' -and ($verifyRemoteReplacePos -lt 0 -or $verifyRemoteSearchPos -ge 0)) {
+    throw 'patched 副本校验失败：未禁用 modelApi 远端覆盖。'
 }
 $verifyPatchedIntegrity = Get-AsarIntegrityStateForOffset $verifyPatched $targetOffset
 if (-not $verifyPatchedIntegrity.IntegrityMatch) {
@@ -1418,6 +1532,7 @@ if ($DryRun) {
         Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
         Write-Host ('SKILLHUB_WOULD_BACKUP_TO=' + $skillHubFixBackup)
     }
+    Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
     Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
     Write-Host ('SHARP_FIX=' + $sharpFixMode)
     Write-SharpStateSummary $sharpFixState
@@ -1457,6 +1572,7 @@ if ($skillHubFixMode -eq 'PATCH') {
     Write-Host ('SKILLHUB_BACKUP=' + $skillHubFixBackup)
     Write-Host ('SKILLHUB_FIXED_COPY=' + $skillHubFixFixedCopy)
 }
+Write-Host ('REMOTE_OVERRIDE_FIX=' + $remoteOverrideFixMode)
 Write-Host ('SKILLHUB_REGEX_FIX=' + $skillHubFixMode)
 Write-Host ('SHARP_FIX=' + $sharpFixMode)
 Write-SharpStateSummary $sharpFixState

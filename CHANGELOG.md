@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.2.7 - 适配 QClaw 0.2.4 的 modelApi 远端覆盖并完成闭环验证
+
+### 更新摘要
+- 默认目标版本从 `QClaw 0.2.1` 更新为 `QClaw 0.2.4`
+- 新增 `QClaw 0.2.4` 的 `other guard` 压缩特征识别：`qe.warning + f/v/g/h`
+- 在原有 `doubao -> other` 等长原位替换之外，新增第二个等长原位补丁位点：禁用 `modelApi` 的远端 provider 列表覆盖
+- 新增远端覆盖位点：`t.data&&t.data.length>0&&(Eo=t.data,hu(Eo,"modelApi"))`
+- 新增修补目标：`t.data&&t.data.length<0&&(Eo=t.data,hu(Eo,"modelApi"))`
+- `-Status` / `-DryRun` / `PATCH_OK` / `UNPATCH_OK` 新增 `REMOTE_OVERRIDE_FIX` 输出
+- `-Status` 新增 `STATUS=PATCHED_NEEDS_REMOTE_OVERRIDE_FIX`，用于识别“主槽位已替换但 UI 仍被远端覆盖”的半修补状态
+- `-Unpatch` / `-DryRun -Unpatch` 已同步支持回退 `other` 槽位与 `modelApi` 远端覆盖禁用位点
+
+### 实机验证
+- 实测安装目录：`C:\Program Files\QClaw`
+- 实测目标版本：`QClaw 0.2.4`
+- 旧脚本默认状态探测：`STATUS=UNSUPPORTED_BUILD`，`DETAIL=missing_other_guard`
+- 新增 `0.2.4 guard` 后状态：`STATUS=UNPATCHED_PATCHABLE`
+- 首次正式补丁结果：`PATCH_OK`
+- 首次补丁后磁盘已变为 `key:"other",label:"其他"`，但 UI 仍显示“火山引擎（豆包）”
+- 继续逆向确认根因：`app.asar` 中 `modelApi` 会用远端返回值覆盖本地静态 provider 列表
+- 二阶段热修补结果：`REMOTE_OVERRIDE_FIX_OK`
+- 集成后主脚本 `-Status`：`STATUS=PATCHED_OR_OPEN`，`REMOTE_OVERRIDE_FIX=ALREADY_FIXED`
+- 集成后主脚本 `-Unpatch -DryRun`：`DRY_RUN_OK`
+- 当前环境 `sharp` 状态：`SHARP_FIX=ALREADY_OK`，`SHARP_STATE=OK`
+
+### 兼容性说明
+- `QClaw 0.2.4` 需要同时满足两类修补，UI 才能稳定显示“其他”：
+  - provider 静态列表中的 `doubao -> other`
+  - `modelApi` 远端 provider 覆盖禁用
+- 新增的远端覆盖位点仍走等长原位修改，不需要完整解包 / 重打 `app.asar`
+- 新位点同样纳入现有 Electron ASAR 完整性修复链：
+  - ASAR 目标文件 `integrity`
+  - `QClaw.exe` 内嵌 `ELECTRONASAR` 头部哈希
+- `skillhub_install` 与 `sharp` 热修补逻辑保持并入主脚本，正式执行流不变
+
+### 升级建议
+- 已使用 `v0.2.6` 或更早脚本的用户，建议直接替换为当前主脚本后重新执行 `-Status` / `-DryRun`
+- 若旧补丁环境已经把 `doubao` 替换成 `other`，但界面仍显示“豆包”，重新运行当前主脚本即可自动识别并补齐 `modelApi` 远端覆盖修补
+- 后续若继续支持新版本，优先复用当前 `searchText + remoteOverride + guard + skillhub path + sharp state` 的识别框架扩展
+
 ## v0.2.6 - 并入 sharp 自检/自修复并补齐只读验证
 
 ### 更新摘要
