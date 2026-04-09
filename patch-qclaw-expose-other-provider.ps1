@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.2.4',
+    [string]$ExpectedDisplayVersion = '0.2.5',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -18,6 +18,10 @@ function Write-Step($msg) {
 
 function Write-WarnMsg($msg) {
     Write-Host ('[QClawPatch] ' + $msg) -ForegroundColor Yellow
+}
+
+function Write-LegacyPatchResidueHint {
+    Write-WarnMsg '若之前用旧版本脚本修补过，随后又升级了 QClaw，旧残留可能导致失败、状态异常或运行异常；可先重新安装 QClaw（https://qclaw.qq.com/），再使用管理员 PowerShell 重新运行脚本。'
 }
 
 function Find-Bytes([byte[]]$haystack, [byte[]]$needle, [int]$startIndex = 0) {
@@ -104,6 +108,92 @@ function Get-NormalizedNpmVersion([string]$versionSpec, [string]$fallbackVersion
         return $matches[1]
     }
     return $fallbackVersion
+}
+
+function New-ReplaceSpec([string]$name, [string]$searchText, [string]$replaceText) {
+    $searchBytes = [System.Text.Encoding]::UTF8.GetBytes($searchText)
+    $replaceBytes = [System.Text.Encoding]::UTF8.GetBytes($replaceText)
+    if ($searchBytes.Length -ne $replaceBytes.Length) {
+        throw ("内部错误：替换串长度不一致 [" + $name + "] [" + $searchBytes.Length + "] vs [" + $replaceBytes.Length + "]")
+    }
+    return [pscustomobject]@{
+        Name = $name
+        SearchText = $searchText
+        ReplaceText = $replaceText
+        SearchBytes = $searchBytes
+        ReplaceBytes = $replaceBytes
+    }
+}
+
+function Get-ReplaceSpecMatchState([byte[]]$haystack, [object[]]$specs) {
+    $searchHits = @()
+    $replaceHits = @()
+
+    foreach ($spec in $specs) {
+        $posSearch = Find-Bytes $haystack $spec.SearchBytes 0
+        while ($posSearch -ge 0) {
+            $searchHits += [pscustomobject]@{
+                Position = $posSearch
+                VariantName = $spec.Name
+                Spec = $spec
+            }
+            $posSearch = Find-Bytes $haystack $spec.SearchBytes ($posSearch + 1)
+        }
+
+        $posReplace = Find-Bytes $haystack $spec.ReplaceBytes 0
+        while ($posReplace -ge 0) {
+            $replaceHits += [pscustomobject]@{
+                Position = $posReplace
+                VariantName = $spec.Name
+                Spec = $spec
+            }
+            $posReplace = Find-Bytes $haystack $spec.ReplaceBytes ($posReplace + 1)
+        }
+    }
+
+    $searchHits = @($searchHits | Sort-Object Position, VariantName)
+    $replaceHits = @($replaceHits | Sort-Object Position, VariantName)
+
+    $mode = if ($searchHits.Count -gt 1 -or $replaceHits.Count -gt 1) {
+        'AMBIGUOUS'
+    } elseif ($searchHits.Count -eq 1 -and $replaceHits.Count -eq 0) {
+        'PATCH'
+    } elseif ($replaceHits.Count -eq 1 -and $searchHits.Count -eq 0) {
+        'ALREADY_FIXED'
+    } elseif ($searchHits.Count -eq 0 -and $replaceHits.Count -eq 0) {
+        'SKIP_FEATURE'
+    } else {
+        'MIXED'
+    }
+
+    $selectedSpec = $null
+    if ($searchHits.Count -eq 1) {
+        $selectedSpec = $searchHits[0].Spec
+    } elseif ($replaceHits.Count -eq 1) {
+        $selectedSpec = $replaceHits[0].Spec
+    } elseif ($specs.Count -gt 0) {
+        $selectedSpec = $specs[0]
+    }
+
+    $searchPosition = if ($searchHits.Count -ge 1) { $searchHits[0].Position } else { -1 }
+    $searchPosition2 = if ($searchHits.Count -ge 2) { $searchHits[1].Position } else { -1 }
+    $replacePosition = if ($replaceHits.Count -ge 1) { $replaceHits[0].Position } else { -1 }
+    $replacePosition2 = if ($replaceHits.Count -ge 2) { $replaceHits[1].Position } else { -1 }
+    $selectedVariant = if ($selectedSpec) { $selectedSpec.Name } else { '' }
+    $selectedSearchBytes = if ($selectedSpec) { $selectedSpec.SearchBytes } else { $null }
+    $selectedReplaceBytes = if ($selectedSpec) { $selectedSpec.ReplaceBytes } else { $null }
+
+    return [pscustomobject]@{
+        Mode = $mode
+        SearchPosition = $searchPosition
+        SearchPosition2 = $searchPosition2
+        ReplacePosition = $replacePosition
+        ReplacePosition2 = $replacePosition2
+        SelectedSpec = $selectedSpec
+        SelectedVariant = $selectedVariant
+        SelectedSearchBytes = $selectedSearchBytes
+        SelectedReplaceBytes = $selectedReplaceBytes
+    }
 }
 
 function Test-SharpImport([string]$openClawRoot) {
@@ -890,11 +980,13 @@ $searchText = 'key:"doubao",label:"火山引擎（豆包）"'
 $replaceTextCore = 'key:"other",label:"其他"'
 $replacePaddingLength = [System.Text.Encoding]::UTF8.GetByteCount($searchText) - [System.Text.Encoding]::UTF8.GetByteCount($replaceTextCore)
 if ($replacePaddingLength -lt 0) {
-    throw '内部错误：v0.2.4 替换串长度超过原始槽位长度，无法执行等长原位替换。'
+    throw '内部错误：provider 槽位替换串长度超过原始槽位长度，无法执行等长原位替换。'
 }
 $replaceText = $replaceTextCore + (' ' * $replacePaddingLength)
-$remoteOverrideSearchText = 't.data&&t.data.length>0&&(Eo=t.data,hu(Eo,"modelApi"))'
-$remoteOverrideReplaceText = 't.data&&t.data.length<0&&(Eo=t.data,hu(Eo,"modelApi"))'
+$remoteOverrideSpecs = @(
+    (New-ReplaceSpec 'QClaw 0.2.4 modelApi' 't.data&&t.data.length>0&&(Eo=t.data,hu(Eo,"modelApi"))' 't.data&&t.data.length<0&&(Eo=t.data,hu(Eo,"modelApi"))'),
+    (New-ReplaceSpec 'QClaw 0.2.5 modelApi' 't.data&&t.data.length>0&&(Ko=t.data,Ru(Ko,"modelApi"))' 't.data&&t.data.length<0&&(Ko=t.data,Ru(Ko,"modelApi"))')
+)
 $guardTexts = @(
     'if(f.value==="other"){if(!g.value)return void Xe.warning("请输入 Base URL");if(!h.value)return void Xe.warning("请输入模型名称")}else if(!m.value)return void Xe.warning("请选择或输入模型名称")}',
     'if(v.value==="other"){if(!g.value)return void We.warning("请输入 Base URL");if(!m.value)return void We.warning("请输入模型名称")}',
@@ -902,13 +994,14 @@ $guardTexts = @(
     'if(v.value==="other"){if(!g.value)return void Ze.warning("请输入 Base URL");if(!h.value)return void Ze.warning("请输入模型名称")}else if(!m.value)return void Ze.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}',
-    'if(f.value==="other"){if(!v.value)return void qe.warning("请输入 Base URL");if(!g.value)return void qe.warning("请输入模型名称")}else if(!h.value)return void qe.warning("请选择或输入模型名称")}'
+    'if(f.value==="other"){if(!v.value)return void qe.warning("请输入 Base URL");if(!g.value)return void qe.warning("请输入模型名称")}else if(!h.value)return void qe.warning("请选择或输入模型名称")}',
+    'if(s.value==="custom"){if(!v.value)return void Je.warning("请选择模型厂商");if(v.value!==Sn){if(!m.value)return void Je.warning("请输入 API Key");if(v.value==="other"){if(!p.value)return void Je.warning("请输入 Base URL");if(!g.value)return void Je.warning("请输入模型名称")}else if(!h.value)return void Je.warning("请选择或输入模型名称")}}'
 )
 $skillHubRegexFixRelativePaths = @(
     'resources\openclaw\config\extensions\qclaw-plugin\packages\content-plugin\src\skillhub-installer.ts',
     'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
 )
-$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1', '0.2.4')
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1', '0.2.4', '0.2.5')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
@@ -919,14 +1012,9 @@ $sharpInstallRegistry = 'https://registry.npmmirror.com'
 
 $search = [System.Text.Encoding]::UTF8.GetBytes($searchText)
 $replace = [System.Text.Encoding]::UTF8.GetBytes($replaceText)
-$remoteOverrideSearch = [System.Text.Encoding]::UTF8.GetBytes($remoteOverrideSearchText)
-$remoteOverrideReplace = [System.Text.Encoding]::UTF8.GetBytes($remoteOverrideReplaceText)
 
 if ($search.Length -ne $replace.Length) {
     throw "内部错误：替换串长度不一致 [$($search.Length)] vs [$($replace.Length)]"
-}
-if ($remoteOverrideSearch.Length -ne $remoteOverrideReplace.Length) {
-    throw "内部错误：modelApi 远端覆盖修补串长度不一致 [$($remoteOverrideSearch.Length)] vs [$($remoteOverrideReplace.Length)]"
 }
 
 if ($Restore) {
@@ -1064,21 +1152,14 @@ $posSearch = Find-Bytes $bytes $search 0
 $posSearch2 = if ($posSearch -ge 0) { Find-Bytes $bytes $search ($posSearch + 1) } else { -1 }
 $posReplace = Find-Bytes $bytes $replace 0
 $posReplace2 = if ($posReplace -ge 0) { Find-Bytes $bytes $replace ($posReplace + 1) } else { -1 }
-$posRemoteSearch = Find-Bytes $bytes $remoteOverrideSearch 0
-$posRemoteSearch2 = if ($posRemoteSearch -ge 0) { Find-Bytes $bytes $remoteOverrideSearch ($posRemoteSearch + 1) } else { -1 }
-$posRemoteReplace = Find-Bytes $bytes $remoteOverrideReplace 0
-$posRemoteReplace2 = if ($posRemoteReplace -ge 0) { Find-Bytes $bytes $remoteOverrideReplace ($posRemoteReplace + 1) } else { -1 }
-$remoteOverrideFixMode = if ($posRemoteSearch2 -ge 0 -or $posRemoteReplace2 -ge 0) {
-    'AMBIGUOUS'
-} elseif ($posRemoteSearch -ge 0 -and $posRemoteReplace -lt 0) {
-    'PATCH'
-} elseif ($posRemoteReplace -ge 0 -and $posRemoteSearch -lt 0) {
-    'ALREADY_FIXED'
-} elseif ($posRemoteSearch -lt 0 -and $posRemoteReplace -lt 0) {
-    'SKIP_FEATURE'
-} else {
-    'MIXED'
-}
+$remoteOverrideState = Get-ReplaceSpecMatchState $bytes $remoteOverrideSpecs
+$posRemoteSearch = $remoteOverrideState.SearchPosition
+$posRemoteSearch2 = $remoteOverrideState.SearchPosition2
+$posRemoteReplace = $remoteOverrideState.ReplacePosition
+$posRemoteReplace2 = $remoteOverrideState.ReplacePosition2
+$remoteOverrideFixMode = $remoteOverrideState.Mode
+$remoteOverrideSearch = $remoteOverrideState.SelectedSearchBytes
+$remoteOverrideReplace = $remoteOverrideState.SelectedReplaceBytes
 $guardMatch = Find-FirstTextMatch $bytes $guardTexts
 $posGuard = if ($guardMatch) { $guardMatch.Position } else { -1 }
 $currentRawHeaderHash = Get-AsarRawHeaderHash $bytes
@@ -1086,6 +1167,7 @@ $currentEmbeddedHeaderHash = Get-EmbeddedAsarHeaderHash $exePath
 
 if ($Status) {
     if ($posGuard -lt 0) {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=UNSUPPORTED_BUILD' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1094,6 +1176,7 @@ if ($Status) {
         exit 2
     }
     if ($posSearch2 -ge 0) {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=AMBIGUOUS' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1103,6 +1186,7 @@ if ($Status) {
         exit 3
     }
     if ($posReplace2 -ge 0) {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=AMBIGUOUS' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1112,6 +1196,7 @@ if ($Status) {
         exit 3
     }
     if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=AMBIGUOUS' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1124,6 +1209,7 @@ if ($Status) {
         exit 3
     }
     if ($remoteOverrideFixMode -eq 'MIXED') {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1134,6 +1220,7 @@ if ($Status) {
         exit 4
     }
     if ($currentEmbeddedHeaderHash -cne $currentRawHeaderHash) {
+        Write-LegacyPatchResidueHint
         Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
         Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
         Write-Host ('APP_ASAR=' + $asarPath)
@@ -1146,6 +1233,7 @@ if ($Status) {
     if ($posReplace -ge 0 -and $posSearch -lt 0) {
         $replaceIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posReplace
         if (-not $replaceIntegrityState.IntegrityMatch) {
+            Write-LegacyPatchResidueHint
             Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
             Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
             Write-Host ('APP_ASAR=' + $asarPath)
@@ -1184,6 +1272,7 @@ if ($Status) {
     if ($posSearch -ge 0 -and $posReplace -lt 0) {
         $searchIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posSearch
         if (-not $searchIntegrityState.IntegrityMatch) {
+            Write-LegacyPatchResidueHint
             Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
             Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
             Write-Host ('APP_ASAR=' + $asarPath)
@@ -1205,6 +1294,7 @@ if ($Status) {
         Write-SharpStateSummary $sharpFixState
         exit 0
     }
+    Write-LegacyPatchResidueHint
     Write-Host 'STATUS=UNKNOWN' -ForegroundColor Red
     Write-Host ('INSTALL_ROOT=' + $resolvedRoot)
     Write-Host ('APP_ASAR=' + $asarPath)
@@ -1216,18 +1306,23 @@ if ($Status) {
 
 if ($Unpatch) {
     if ($posGuard -lt 0) {
+        Write-LegacyPatchResidueHint
         throw '特征校验失败：未找到兼容的 other 分支逻辑，拒绝反修补。'
     }
     if ($posReplace2 -ge 0) {
+        Write-LegacyPatchResidueHint
         throw "安全校验失败：已补丁定位串出现多次 [$posReplace, $posReplace2]，拒绝反修补。"
     }
     if ($posSearch2 -ge 0) {
+        Write-LegacyPatchResidueHint
         throw "安全校验失败：原始定位串出现多次 [$posSearch, $posSearch2]，拒绝反修补。"
     }
     if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+        Write-LegacyPatchResidueHint
         throw '安全校验失败：modelApi 远端覆盖特征出现多次，拒绝反修补。'
     }
     if ($remoteOverrideFixMode -eq 'MIXED') {
+        Write-LegacyPatchResidueHint
         throw '安全校验失败：modelApi 远端覆盖特征状态混杂，拒绝反修补。'
     }
     if ($posSearch -ge 0 -and $posReplace -lt 0 -and $remoteOverrideFixMode -ne 'ALREADY_FIXED') {
@@ -1242,9 +1337,11 @@ if ($Unpatch) {
         exit 0
     }
     if ($posReplace -lt 0 -and $remoteOverrideFixMode -ne 'ALREADY_FIXED') {
+        Write-LegacyPatchResidueHint
         throw '特征校验失败：未找到已补丁 other 槽位与 remote override 修补，拒绝反修补。'
     }
     if ($posSearch -ge 0 -and $posReplace -ge 0) {
+        Write-LegacyPatchResidueHint
         throw '特征校验失败：检测到原始 doubao 与已补丁 other 特征同时存在，状态混杂，拒绝反修补。'
     }
 
@@ -1317,18 +1414,23 @@ if ($Unpatch) {
 }
 
 if ($posGuard -lt 0) {
+    Write-LegacyPatchResidueHint
     throw '特征校验失败：未找到兼容的 other 分支逻辑，拒绝补丁。'
 }
 if ($posReplace2 -ge 0) {
+    Write-LegacyPatchResidueHint
     throw "安全校验失败：已补丁定位串出现多次 [$posReplace, $posReplace2]，拒绝补丁。"
 }
 if ($posSearch2 -ge 0) {
+    Write-LegacyPatchResidueHint
     throw "安全校验失败：原始定位串出现多次 [$posSearch, $posSearch2]，拒绝补丁。"
 }
 if ($remoteOverrideFixMode -eq 'AMBIGUOUS') {
+    Write-LegacyPatchResidueHint
     throw '安全校验失败：modelApi 远端覆盖特征出现多次，拒绝补丁。'
 }
 if ($remoteOverrideFixMode -eq 'MIXED') {
+    Write-LegacyPatchResidueHint
     throw '安全校验失败：modelApi 远端覆盖特征状态混杂，拒绝补丁。'
 }
 $patchMode = 'PATCH'
@@ -1379,14 +1481,17 @@ if ($posReplace -ge 0 -and $posSearch -lt 0) {
 
 if ($patchMode -eq 'PATCH') {
     if ($posSearch -lt 0) {
+        Write-LegacyPatchResidueHint
         throw '特征校验失败：未找到原始 doubao 槽位，拒绝补丁。'
     }
     if ($posReplace -ge 0) {
+        Write-LegacyPatchResidueHint
         throw '特征校验失败：检测到原始 doubao 与已补丁 other 特征同时存在，状态混杂，拒绝补丁。'
     }
 
     $searchIntegrityState = Get-AsarIntegrityStateForOffset $bytes $posSearch
     if (-not $searchIntegrityState.IntegrityMatch) {
+        Write-LegacyPatchResidueHint
         throw '补丁前校验失败：原始目标文件的 ASAR 完整性记录不一致，拒绝补丁。'
     }
 }
