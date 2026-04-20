@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.2.8 - 适配 QClaw 0.2.10 并完成实机验证
+
+### 更新摘要
+- 默认目标版本从 `QClaw 0.2.5` 更新为 `QClaw 0.2.10`
+- 新增 `QClaw 0.2.10` 的 `other guard` 压缩特征识别：`lt.warning + d/f/v/h/m/g`
+- `modelApi` 远端覆盖位点扩展到 `0.2.10` 变体：`t.data&&t.data.length>0&&(To=t.data,p0(To,"modelApi"))`
+- `skillhub_install` regex 热修补支持扩展到 `QClaw 0.2.10`
+- 同步更新 [`README.md`](README.md) 与 [`AGENTS.md`](AGENTS.md) 的适用范围、注意事项与实测结果
+
+### 实机验证
+- 实测安装目录：`C:\Program Files\QClaw`
+- 实测目标版本：`QClaw 0.2.10`
+- 旧脚本放宽版本后状态：`STATUS=UNSUPPORTED_BUILD`，`DETAIL=missing_other_guard`
+- 重新适配后主脚本 `-Status`：`STATUS=UNPATCHED_PATCHABLE`
+- 主脚本 `-DryRun`：`DRY_RUN_OK`，`MODE=PATCH`
+- 管理员正式执行：`PATCH_OK`
+- 补丁后复核：`STATUS=PATCHED_OR_OPEN`
+- 关键状态：`REMOTE_OVERRIDE_FIX=ALREADY_FIXED`、`SKILLHUB_REGEX_FIX=PATCH`、`SHARP_STATE=OK`
+
+### 兼容性说明
+- `QClaw 0.2.4 / 0.2.5 / 0.2.10` 需要同时满足两类修补，UI 才能稳定显示“其他”：
+  - provider 静态列表中的 `doubao -> other`
+  - `modelApi` 远端 provider 覆盖禁用
+- `0.2.10` 的变化主要集中在 `other guard` 压缩变量名与 `modelApi` 覆盖位点变量名，等长原位补丁策略保持不变
+- `skillhub_install` 与 `sharp` 热修补逻辑继续并入主脚本，正式执行流不变
+
+### 升级建议
+- 已使用 `v0.2.7` 或更早脚本的用户，建议直接替换为当前主脚本后重新执行 `-Status` / `-DryRun`
+- 若之前用旧版本脚本修补过，随后又升级了 `QClaw`，旧残留可能导致正式执行失败、状态异常或运行异常；此时建议先重新安装 `QClaw`（`https://qclaw.qq.com/`），再使用**管理员 PowerShell**重新运行脚本
+- 后续若继续支持新版本，优先复用当前 `searchText + remoteOverride + guard + skillhub path + sharp state` 的识别框架扩展
+
 ## v0.2.7 - 适配 QClaw 0.2.5 并补充旧补丁残留提示
 
 ### 更新摘要

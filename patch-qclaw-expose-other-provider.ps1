@@ -1,6 +1,6 @@
 param(
     [string]$InstallRoot = '',
-    [string]$ExpectedDisplayVersion = '0.2.5',
+    [string]$ExpectedDisplayVersion = '0.2.10',
     [switch]$AllowUnknownVersion,
     [switch]$DryRun,
     [switch]$Unpatch,
@@ -985,7 +985,8 @@ if ($replacePaddingLength -lt 0) {
 $replaceText = $replaceTextCore + (' ' * $replacePaddingLength)
 $remoteOverrideSpecs = @(
     (New-ReplaceSpec 'QClaw 0.2.4 modelApi' 't.data&&t.data.length>0&&(Eo=t.data,hu(Eo,"modelApi"))' 't.data&&t.data.length<0&&(Eo=t.data,hu(Eo,"modelApi"))'),
-    (New-ReplaceSpec 'QClaw 0.2.5 modelApi' 't.data&&t.data.length>0&&(Ko=t.data,Ru(Ko,"modelApi"))' 't.data&&t.data.length<0&&(Ko=t.data,Ru(Ko,"modelApi"))')
+    (New-ReplaceSpec 'QClaw 0.2.5 modelApi' 't.data&&t.data.length>0&&(Ko=t.data,Ru(Ko,"modelApi"))' 't.data&&t.data.length<0&&(Ko=t.data,Ru(Ko,"modelApi"))'),
+    (New-ReplaceSpec 'QClaw 0.2.10 modelApi' 't.data&&t.data.length>0&&(To=t.data,p0(To,"modelApi"))' 't.data&&t.data.length<0&&(To=t.data,p0(To,"modelApi"))')
 )
 $guardTexts = @(
     'if(f.value==="other"){if(!g.value)return void Xe.warning("请输入 Base URL");if(!h.value)return void Xe.warning("请输入模型名称")}else if(!m.value)return void Xe.warning("请选择或输入模型名称")}',
@@ -995,13 +996,14 @@ $guardTexts = @(
     'if(f.value==="other"){if(!m.value)return void We.warning("请输入 Base URL");if(!g.value)return void We.warning("请输入模型名称")}else if(!h.value)return void We.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!g.value)return void Ge.warning("请输入 Base URL");if(!h.value)return void Ge.warning("请输入模型名称")}else if(!m.value)return void Ge.warning("请选择或输入模型名称")}',
     'if(f.value==="other"){if(!v.value)return void qe.warning("请输入 Base URL");if(!g.value)return void qe.warning("请输入模型名称")}else if(!h.value)return void qe.warning("请选择或输入模型名称")}',
-    'if(s.value==="custom"){if(!v.value)return void Je.warning("请选择模型厂商");if(v.value!==Sn){if(!m.value)return void Je.warning("请输入 API Key");if(v.value==="other"){if(!p.value)return void Je.warning("请输入 Base URL");if(!g.value)return void Je.warning("请输入模型名称")}else if(!h.value)return void Je.warning("请选择或输入模型名称")}}'
+    'if(s.value==="custom"){if(!v.value)return void Je.warning("请选择模型厂商");if(v.value!==Sn){if(!m.value)return void Je.warning("请输入 API Key");if(v.value==="other"){if(!p.value)return void Je.warning("请输入 Base URL");if(!g.value)return void Je.warning("请输入模型名称")}else if(!h.value)return void Je.warning("请选择或输入模型名称")}}',
+    'if(d.value==="custom"){if(!f.value)return void lt.warning("请选择模型厂商");if(f.value!==yl){if(!v.value)return void lt.warning("请输入 API Key");if(f.value==="other"){if(!h.value)return void lt.warning("请输入 Base URL");if(!m.value)return void lt.warning("请输入模型名称")}else if(!g.value)return void lt.warning("请选择或输入模型名称")}}'
 )
 $skillHubRegexFixRelativePaths = @(
     'resources\openclaw\config\extensions\qclaw-plugin\packages\content-plugin\src\skillhub-installer.ts',
     'resources\openclaw\config\extensions\content-plugin\src\skillhub-installer.ts'
 )
-$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1', '0.2.4', '0.2.5')
+$skillHubRegexFixSupportedVersions = @('0.1.19', '0.1.20', '0.1.22', '0.2.1', '0.2.4', '0.2.5', '0.2.10')
 $skillHubRegexFixLegacyRuntimePattern = 'const SKILL_NAME_PATTERN = /^[\p{L}\p{N}_\-\.]{1,128}$/u;'
 $skillHubRegexFixPatchedRuntimePattern = 'const SKILL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;'
 $skillHubRegexFixLegacySchemaPattern = 'pattern: "^[\\w\\-\\.\\p{L}]{1,128}$",'
